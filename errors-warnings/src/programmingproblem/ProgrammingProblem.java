@@ -2,16 +2,26 @@ package programmingproblem;
 
 import java.io.BufferedReader;
 import java.io.CharConversionException;
+import java.io.Closeable;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.Serializable;
+import java.io.UncheckedIOException;
+import java.nio.file.DirectoryIteratorException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
+import java.util.Spliterator;
+import java.util.Spliterators;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 // 2-21. 'equals()'をオーバーライドしているが'hashCode()'がオーバーライドされていないクラス
 public class ProgrammingProblem extends ProgrammingProblemParent {
@@ -177,7 +187,59 @@ public class ProgrammingProblem extends ProgrammingProblemParent {
 		}
 	}
 	
-	// 2-18. 潜在的なリソース・リーク は実装方法不明
+	// java.nio.file.Filesのlist(Path dir)の実装をそのままコピーしたもの
+	private Stream<Path> potentiallyUnclosedCloseable(Path dir) throws IOException {
+        DirectoryStream<Path> ds = Files.newDirectoryStream(dir);
+        try {
+            final Iterator<Path> delegate = ds.iterator();
+
+            // Re-wrap DirectoryIteratorException to UncheckedIOException
+            Iterator<Path> iterator = new Iterator<>() {
+                @Override
+                public boolean hasNext() {
+                    try {
+                        return delegate.hasNext();
+                    } catch (DirectoryIteratorException e) {
+                        throw new UncheckedIOException(e.getCause());
+                    }
+                }
+                @Override
+                public Path next() {
+                    try {
+                        return delegate.next();
+                    } catch (DirectoryIteratorException e) {
+                        throw new UncheckedIOException(e.getCause());
+                    }
+                }
+            };
+
+            Spliterator<Path> spliterator =
+                Spliterators.spliteratorUnknownSize(iterator, Spliterator.DISTINCT);
+            // 2-18. 潜在的なリソース・リーク
+            return StreamSupport.stream(spliterator, false)
+                                .onClose(asUncheckedRunnable(ds));
+        } catch (Error|RuntimeException e) {
+            try {
+                ds.close();
+            } catch (IOException ex) {
+                try {
+                    e.addSuppressed(ex);
+                } catch (Throwable ignore) {}
+            }
+            throw e;
+        }
+	}
+	
+    private static Runnable asUncheckedRunnable(Closeable c) {
+        return () -> {
+            try {
+                c.close();
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        };
+    }
+	
 
 	// 2-19. serialVersionUIDなしのシリアライズ可能クラス
 	private class MissingSerialVersion implements Serializable {
